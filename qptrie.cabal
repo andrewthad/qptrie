@@ -13,7 +13,9 @@ build-type: Simple
 extra-source-files: CHANGELOG.md
 
 library
-  exposed-modules: Data.Trie.Quad
+  exposed-modules:
+    Data.Trie.Quad
+    Data.Trie.Quad.Prefix
   build-depends:
     , base >=4.12 && <5
     , primitive >=0.7 && <0.8
