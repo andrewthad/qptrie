@@ -23,6 +23,7 @@ import Data.Bits (shiftR,shiftL)
 import Data.Primitive (SmallArray)
 import Data.Word (Word32,Word64)
 import Control.Monad.ST.Run (runSmallArrayST)
+import Numeric (showHex)
 import Text.Printf (printf)
 import qualified Data.Primitive as PM
 
@@ -144,7 +145,7 @@ insert !b !k0 v t0 =
       !j = nearestKey k t0
       !critPos = deltaNybbleStartIx j k
       go lf@(Leaf _ k' _) = if k == k'
-        then errorWithoutStackTrace "Data.Trie.Quad.Prefix: overlapping keys"
+        then errorWithoutStackTrace ("Data.Trie.Quad.Prefix: overlapping keys " ++ showHex k0 (" and " ++ showHex k' ""))
         else makeDoubleton critPos b k j v lf
       go br@(Branch pos bitset children) =
         case compare pos critPos of
