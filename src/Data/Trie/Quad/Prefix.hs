@@ -144,8 +144,8 @@ insert !b !k0 v t0 =
   let !k = normalizeKey b k0
       !j = nearestKey k t0
       !critPos = deltaNybbleStartIx j k
-      go lf@(Leaf _ k' _) = if k == k'
-        then errorWithoutStackTrace ("Data.Trie.Quad.Prefix: overlapping keys " ++ showHex k0 (" and " ++ showHex k' ""))
+      go lf@(Leaf b' k' _) = if k == k'
+        then errorWithoutStackTrace ("Data.Trie.Quad.Prefix: overlapping keys " ++ showHex k0 ('[' : shows b ("] and " ++ showHex k' ('[' : shows b' "]"))))
         else makeDoubleton critPos b k j v lf
       go br@(Branch pos bitset children) =
         case compare pos critPos of
