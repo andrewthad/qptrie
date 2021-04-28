@@ -1,23 +1,31 @@
 {-# language BangPatterns #-}
 {-# language BinaryLiterals #-}
+{-# language DataKinds #-}
 {-# language ScopedTypeVariables #-}
 {-# language TypeApplications #-}
 {-# language NumDecimals #-}
+{-# language StandaloneDeriving #-}
+{-# language DerivingStrategies #-}
+{-# language GeneralizedNewtypeDeriving #-}
 
 import Control.Monad (when,replicateM)
+import Data.Bits (unsafeShiftR)
 import Data.Bool (bool)
+import Data.Bytes.Types (BytesN(..))
 import Data.Char (ord)
 import Data.Primitive (ByteArray)
-import Data.Word (Word64)
+import Data.Word (Word64,Word8,Word16)
 import Data.Foldable (foldl')
 import Test.Tasty (defaultMain,testGroup,TestTree)
 import Test.Tasty.HUnit ((@=?),assertFailure)
 import Test.Tasty.QuickCheck (testProperty,(===))
 import Text.Printf (printf)
 
+import qualified Arithmetic.Nat as Nat
 import qualified Data.List as List
 import qualified Data.Trie.Quad as Trie
 import qualified Data.Trie.Quad.Prefix as Prefix
+import qualified Data.Trie.Quad.Bytes as BytesTrie
 import qualified Data.Bits as Bits
 import qualified Data.Primitive as PM
 import qualified GHC.Exts as Exts
@@ -99,6 +107,66 @@ tests = testGroup "trie"
         let t = foldl' (\acc w -> Trie.insert w w acc) (Trie.singleton 0 0) xs
          in QC.counterexample (show t) (Trie.valid t)
     ]
+  , testGroup "bytes"
+    [ THU.testCase "A" $
+        let theTrie = BytesTrie.insert
+              Nat.two
+              (w16b 0x0BFF )
+              "there"
+              (BytesTrie.singleton Nat.two (w16b 0x0AFF) "hello")
+         in case BytesTrie.valid theTrie of
+              True -> case BytesTrie.lookup Nat.two (w16b 0x0AFF) theTrie of
+                Just "hello" -> pure ()
+                _ -> THU.assertFailure ("expected just hello, trie was: " ++ show theTrie)
+              False -> THU.assertFailure ("invalid trie: " ++ show theTrie)
+    , THU.testCase "B" $
+        (BytesTrie.insert
+          Nat.two
+          (w16b 0x0BFF )
+          "there"
+          (BytesTrie.singleton Nat.two (w16b 0x0AFF) "hello")
+        )
+        @=?
+        (BytesTrie.insert
+          Nat.two
+          (w16b 0x0AFF )
+          "hello"
+          (BytesTrie.singleton Nat.two (w16b 0x0BFF) "there")
+        )
+    , THU.testCase "C" $
+        ( BytesTrie.insert Nat.two (w16b 0x0BFF) "there"
+        $ BytesTrie.insert Nat.two (w16b 0x0CFF) "people"
+        $ BytesTrie.singleton Nat.two (w16b 0x0AFF) "hello"
+        )
+        @=?
+        ( BytesTrie.insert Nat.two (w16b 0x0CFF) "people"
+        $ BytesTrie.insert Nat.two (w16b 0x0AFF) "hello"
+        $ BytesTrie.singleton Nat.two (w16b 0x0BFF) "there"
+        )
+    , THU.testCase "D" $
+        ( BytesTrie.insert Nat.two (w16b 0x0BFF) "there"
+        $ BytesTrie.insert Nat.two (w16b 0x00FF) "people"
+        $ BytesTrie.singleton Nat.two (w16b 0x0AFF) "hello"
+        )
+        @=?
+        ( BytesTrie.insert Nat.two (w16b 0x00FF) "people"
+        $ BytesTrie.insert Nat.two (w16b 0x0AFF) "hello"
+        $ BytesTrie.singleton Nat.two (w16b 0x0BFF) "there"
+        )
+    , THU.testCase "E" $
+        ( BytesTrie.insert Nat.two (w16b 0x0B1F) "there"
+        $ BytesTrie.insert Nat.two (w16b 0x0B0F) "people"
+        $ BytesTrie.singleton Nat.two (w16b 0x0AFF) "hello"
+        )
+        @=?
+        ( BytesTrie.insert Nat.two (w16b 0x0B0F) "people"
+        $ BytesTrie.insert Nat.two (w16b 0x0AFF) "hello"
+        $ BytesTrie.singleton Nat.two (w16b 0x0B1F) "there"
+        )
+    , THU.testCase "F" $ case BytesTrie.valid alphaBytesTrie of
+        True -> pure ()
+        False -> THU.assertFailure (show alphaBytesTrie)
+    ]
   , testGroup "prefix"
     [ THU.testCase "A" $
         Prefix.lookup 0x0AF1
@@ -154,6 +222,17 @@ alphaTrie = id
   $ Trie.insert    0x0AF0 "baz"
   $ Trie.singleton 0x0AE0 "hello"
 
+alphaBytesTrie :: BytesTrie.Trie 2 String
+alphaBytesTrie = id
+  $ BytesTrie.insert    Nat.two (w16b 0x0400) "burr"
+  $ BytesTrie.insert    Nat.two (w16b 0x0800) "bla"
+  $ BytesTrie.insert    Nat.two (w16b 0x0900) "foo"
+  $ BytesTrie.insert    Nat.two (w16b 0x0A90) "buzz"
+  $ BytesTrie.insert    Nat.two (w16b 0x0AC0) "bang"
+  $ BytesTrie.insert    Nat.two (w16b 0x0AD0) "bar"
+  $ BytesTrie.insert    Nat.two (w16b 0x0AF0) "baz"
+  $ BytesTrie.singleton Nat.two (w16b 0x0AE0) "hello"
+
 instance Show a => Show (Trie.Trie a) where
   showsPrec !d (Trie.Leaf k v) = showParen (d > 10) $
     showString "Leaf " .
@@ -183,3 +262,30 @@ instance Show a => Show (Prefix.Trie a) where
     (\s -> printf "0b%016b" bitset ++ s) .
     showChar ' ' .
     showsPrec 11 children
+
+deriving newtype instance Show a => Show (BytesTrie.Trie n a)
+
+-- TODO: only kind of works correctly
+instance Show a => Show (BytesTrie.Node a) where
+  showsPrec !d (BytesTrie.Leaf k v) = showParen (d > 10) $
+    showString "Leaf " .
+    (\s -> shows k s) .
+    showChar ' ' .
+    showsPrec 11 v
+  showsPrec !d (BytesTrie.Branch pos bitset children) = showParen (d > 10) $
+    showString "Branch " .
+    showsPrec 11 pos .
+    showChar ' ' .
+    (\s -> printf "0b%016b" bitset ++ s) .
+    showChar ' ' .
+    showsPrec 11 children
+
+w16b :: Word16 -> BytesN 2
+w16b w = BytesN
+  { array=Exts.fromList
+      [ (0xEF :: Word8)
+      , (fromIntegral @Word16 @Word8 (unsafeShiftR w 8))
+      , (fromIntegral @Word16 @Word8 (unsafeShiftR w 0))
+      ]
+  , offset=1
+  }
