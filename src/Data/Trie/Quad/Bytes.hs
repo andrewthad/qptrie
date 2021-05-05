@@ -74,8 +74,8 @@ foldr g b0 (Trie t0) = go t0 b0 where
 foldlM' :: Monad m => (b -> ByteArrayN n -> a -> m b) -> b -> Trie n a -> m b
 {-# inline foldlM' #-}
 foldlM' g b0 (Trie t0) = go b0 t0 where
-  go b (Leaf k a) = g b (ByteArrayN k) a
-  go b (Branch _ _ children) = Foldable.foldlM go b children
+  go !b (Leaf k a) = g b (ByteArrayN k) a
+  go !b (Branch _ _ children) = Foldable.foldlM go b children
 
 singleton :: Arithmetic.Nat n -> BytesN n -> a -> Trie n a
 singleton (Arithmetic.Nat n) BytesN{array,offset} !v =
