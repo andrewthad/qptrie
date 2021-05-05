@@ -20,14 +20,15 @@ module Data.Trie.Quad.Bytes
   , insert
   , lookup
   , valid
+  , foldr
   ) where
 
-import Prelude hiding (lookup,length)
+import Prelude hiding (lookup,length,foldr)
 
 import Data.Trie.Internal (insertSmallArray,replaceSmallArray)
 import Data.Bits (countLeadingZeros,xor,popCount,(.&.),(.|.),unsafeShiftR,unsafeShiftL)
 import Data.Primitive (ByteArray)
-import Data.Bytes.Types (BytesN(..),Bytes(..))
+import Data.Bytes.Types (BytesN(..),Bytes(..),ByteArrayN(..))
 import Data.Primitive (SmallArray)
 import Data.Word (Word8,Word64)
 import Control.Monad.ST.Run (runSmallArrayST)
@@ -35,6 +36,7 @@ import GHC.TypeNats (Nat)
 import qualified Arithmetic.Types as Arithmetic
 import qualified Arithmetic.Unsafe as Arithmetic
 import qualified Data.Bytes as Bytes
+import qualified Data.Foldable as Foldable
 import qualified Data.Primitive as PM
 
 -- | Non-empty qp tries with fixed-length keys.
@@ -52,6 +54,13 @@ data Node a
       !ByteArray -- invariant, length n
       !a
   deriving stock (Eq)
+
+-- | Nonstrict right fold over the key-value pairs in the trie.
+foldr :: (ByteArrayN n -> a -> b -> b) -> b -> Trie n a -> b
+{-# inline foldr #-}
+foldr g b0 (Trie t0) = go t0 b0 where
+  go (Leaf k a) b = g (ByteArrayN k) a b
+  go (Branch _ _ children) b = Foldable.foldr go b children
 
 singleton :: Arithmetic.Nat n -> BytesN n -> a -> Trie n a
 singleton (Arithmetic.Nat n) BytesN{array,offset} !v =
