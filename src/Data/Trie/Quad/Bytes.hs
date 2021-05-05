@@ -22,6 +22,7 @@ module Data.Trie.Quad.Bytes
   , valid
   , foldr
   , foldlM'
+  , size
   ) where
 
 import Prelude hiding (lookup,length,foldr)
@@ -55,6 +56,12 @@ data Node a
       !ByteArray -- invariant, length n
       !a
   deriving stock (Eq)
+
+size :: Trie n a -> Int
+size (Trie t0) = go 0 t0 where
+  go !b Leaf{} = b + 1
+  go !b (Branch _ _ children) = Foldable.foldl' go b children
+  
 
 -- | Nonstrict right fold over the key-value pairs in the trie.
 foldr :: (ByteArrayN n -> a -> b -> b) -> b -> Trie n a -> b
