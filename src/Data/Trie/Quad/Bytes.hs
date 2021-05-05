@@ -21,6 +21,7 @@ module Data.Trie.Quad.Bytes
   , lookup
   , valid
   , foldr
+  , foldlM'
   ) where
 
 import Prelude hiding (lookup,length,foldr)
@@ -61,6 +62,13 @@ foldr :: (ByteArrayN n -> a -> b -> b) -> b -> Trie n a -> b
 foldr g b0 (Trie t0) = go t0 b0 where
   go (Leaf k a) b = g (ByteArrayN k) a b
   go (Branch _ _ children) b = Foldable.foldr go b children
+
+-- | Strict monadic left fold over the key-value pairs in the trie.
+foldlM' :: Monad m => (b -> ByteArrayN n -> a -> m b) -> b -> Trie n a -> m b
+{-# inline foldlM' #-}
+foldlM' g b0 (Trie t0) = go b0 t0 where
+  go b (Leaf k a) = g b (ByteArrayN k) a
+  go b (Branch _ _ children) = Foldable.foldlM go b children
 
 singleton :: Arithmetic.Nat n -> BytesN n -> a -> Trie n a
 singleton (Arithmetic.Nat n) BytesN{array,offset} !v =
