@@ -18,6 +18,7 @@ module Data.Trie.Quad
 
 import Prelude hiding (lookup)
 
+import Data.Trie.Internal (insertSmallArray,replaceSmallArray)
 import Data.Bits (countLeadingZeros,xor,popCount,(.&.),(.|.),unsafeShiftR,unsafeShiftL)
 import Data.Primitive (SmallArray)
 import Data.Word (Word32,Word64)
@@ -162,77 +163,6 @@ makeDoubleton !critPos !k !j v !node =
       .|.
       unsafeShiftL 1 (fromIntegral @Word64 @Int jslice)
      ) arr
-
--- insert :: forall a. Word64 -> a -> Trie a -> Trie a
--- {-# noinline insert #-}
--- insert !k v t0 = case go (-4) t0 of
---   Left _ -> errorWithoutStackTrace "Data.Trie.Quad.insert: implementation mistake"
---   Right r -> r
---   where
---   go :: Int -- parent node position
---      -> Trie a 
---      -> Either Int (Trie a) -- either a new child or position at which key differs
---   go !parentPos (Leaf x xv) = if x == k
---     then Right (Leaf x v)
---     else
---       let pos = deltaNybbleStartIx k x
---        in if pos > parentPos
---             then
---               let k' = unsafeShiftR k (60 - pos) .&. 0x0F
---                   x' = unsafeShiftR x (60 - pos) .&. 0x0F
---                   kleaf = Leaf k v
---                   xleaf = Leaf x xv
---                   arr = runSmallArrayST $ do 
---                     dst <- PM.newSmallArray 2 kleaf
---                     let !ix = if k' < x' then 1 else 0
---                     PM.writeSmallArray dst ix xleaf
---                     PM.unsafeFreezeSmallArray dst
---                in Right $ Branch pos
---                  (unsafeShiftL 1 (fromIntegral @Word64 @Int k')
---                   .|.
---                   unsafeShiftL 1 (fromIntegral @Word64 @Int x')
---                  ) arr
---             else Left pos
---   go !_ (Branch pos bitset children) =
---     let i :: Word64 -- a 4-bit number, a key slice interpreted as an index
---         i = 0x0F .&. unsafeShiftR k (60 - pos)
---         mask :: Word
---         mask = unsafeShiftL (1 :: Word) (fromIntegral @Word64 @Int i)
---         -- If there is no matching child nodes, we pick an arbitrary one (position 0)
---         -- just to be able to recover the key and compute a delta.
---      in case bitset .&. mask of
---           0 -> 
---             let !(# child #) = PM.indexSmallArray## children 0
---                 !deltaPos = leftmostChildDeltaNybble k child
---              in if deltaPos >= pos
---                   then Right (Branch pos (bitset .|. mask) (insertSmallArray children trueIx (Leaf k v)))
---                   else Left deltaPos 
---           _ ->
---             let !trueIx = popCount (bitset .&. (mask - 1))
---                 !(# child #) = PM.indexSmallArray## children trueIx
---              in case go pos child of
---                   Left deltaPos -> if deltaPos == pos
---                     then Right deltaP
---                     else Left deltaPos
---                   Right child' -> Right (Branch pos bitset (replaceSmallArray children trueIx child'))
-
--- | /O(n)/ Insert an element at the given position in this array,
--- increasing its size by one.
-insertSmallArray :: SmallArray a -> Int -> a -> SmallArray a
-insertSmallArray !ary !idx b = runSmallArrayST $ do
-  mary <- PM.newSmallArray (count+1) b
-  PM.copySmallArray mary 0 ary 0 idx
-  PM.copySmallArray mary (idx+1) ary idx (count-idx)
-  PM.unsafeFreezeSmallArray mary
-  where !count = PM.sizeofSmallArray ary
-
--- | /O(n)/ Replace the element at the given index.
-replaceSmallArray :: SmallArray a -> Int -> a -> SmallArray a
-replaceSmallArray !ary !idx b = runSmallArrayST $ do
-  mary <- PM.thawSmallArray ary 0 count
-  PM.writeSmallArray mary idx b
-  PM.unsafeFreezeSmallArray mary
-  where !count = PM.sizeofSmallArray ary
 
 -- Returns number between 0 and 64. Number always divides 4 evenly.
 deltaNybbleStartIx :: Word64 -> Word64 -> Int
