@@ -1,6 +1,9 @@
 {-# language BangPatterns #-}
 {-# language BinaryLiterals #-}
 {-# language DerivingStrategies #-}
+{-# language DeriveFoldable #-}
+{-# language DeriveFunctor #-}
+{-# language DeriveTraversable #-}
 {-# language MagicHash #-}
 {-# language ScopedTypeVariables #-}
 {-# language TypeApplications #-}
@@ -21,7 +24,7 @@ import Prelude hiding (lookup)
 import Data.Trie.Internal (insertSmallArray,replaceSmallArray)
 import Data.Bits (countLeadingZeros,xor,popCount,(.&.),(.|.),unsafeShiftR,unsafeShiftL)
 import Data.Primitive (SmallArray)
-import Data.Word (Word32,Word64)
+import Data.Word (Word64)
 import Control.Monad.ST.Run (runSmallArrayST)
 import qualified Data.Primitive as PM
 
@@ -56,7 +59,7 @@ data Trie a
       -- invariant: max length of children is 16
       -- invariant: position in any child branches is greater than position of parent
   | Leaf !Word64 !a
-  deriving stock (Eq)
+  deriving stock (Eq,Show,Foldable,Traversable,Functor)
 
 singleton :: Word64 -> a -> Trie a
 singleton !k !v = Leaf k v
