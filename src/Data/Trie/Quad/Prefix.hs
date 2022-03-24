@@ -18,13 +18,13 @@ module Data.Trie.Quad.Prefix
 
 import Prelude hiding (lookup)
 
+import Control.Monad.ST.Run (runSmallArrayST)
 import Data.Bits (countLeadingZeros,xor,popCount,(.&.),(.|.),unsafeShiftR,unsafeShiftL)
 import Data.Bits (shiftR,shiftL)
 import Data.Primitive (SmallArray)
-import Data.Word (Word32,Word64)
-import Control.Monad.ST.Run (runSmallArrayST)
+import Data.Word (Word64)
 import Numeric (showHex)
-import Text.Printf (printf)
+
 import qualified Data.Primitive as PM
 
 -- | Non-empty qp tries. These have all of the properties that the tries in
@@ -90,8 +90,6 @@ lookup# !k t0 = go t0 where
   go (Branch pos bitset children) =
     let i :: Word64 -- a 4-bit number, a key slice interpreted as an index
         i = 0x0F .&. unsafeShiftR k (60 - pos)
-        mask :: Word
-        mask = unsafeShiftL (1 :: Word) (fromIntegral @Word64 @Int i)
         (ix,wasFound) = compressIndex i bitset
      in case wasFound of
           -- False -> error
