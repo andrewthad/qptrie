@@ -18,6 +18,7 @@ module Data.Trie.Quad.Bytes
   , Node(..)
   , singleton
   , insert
+  , upsert
   , lookup
   , valid
   , foldr
@@ -48,7 +49,7 @@ newtype Trie (n :: Nat) a = Trie (Node a)
 
 data Node a
   = Branch
-      !Int -- position, >=0 and <=(n*8-4), must divide 4 evenly 
+      !Int -- position, >=0 and <=(n*8-4), must divide 4 evenly
       !Word -- bitset
       !(SmallArray (Node a))
       -- invariant: max length of children is 16
@@ -151,16 +152,22 @@ compressIndex !i !bitset =
 
 insert :: Arithmetic.Nat n -> BytesN n -> a -> Trie n a -> Trie n a
 {-# inline insert #-}
-insert (Arithmetic.Nat n) BytesN{array, offset} v (Trie trie) = Trie (insertNode n array offset v trie)
+insert (Arithmetic.Nat n) BytesN{array, offset} v (Trie trie)
+  = Trie (upsertNode n array offset (const v) trie)
 
-insertNode :: Int -> ByteArray -> Int -> a -> Node a -> Node a
-{-# noinline insertNode #-}
-insertNode !len !k !off0 v t0 =
+upsert :: Arithmetic.Nat n -> BytesN n -> (Maybe a -> a) -> Trie n a -> Trie n a
+{-# inline upsert #-}
+upsert (Arithmetic.Nat n) BytesN{array,offset} update (Trie trie)
+  = Trie (upsertNode n array offset update trie)
+
+upsertNode :: Int -> ByteArray -> Int -> (Maybe a -> a) -> Node a -> Node a
+{-# inline upsertNode #-} -- inline b/c it takes a callback
+upsertNode !len !k !off0 update t0 =
   let !j = nearestKey k off0 t0
       !critPos = deltaNybbleStartIx len j 0 k off0
-      go lf@(Leaf k' _) = if Bytes{array=k,offset=off0,length=len} /= Bytes{array=k',offset=0,length=len}
-        then makeDoubleton len critPos k off0 j v lf
-        else Leaf k' v
+      go lf@(Leaf k' v0) = if Bytes{array=k,offset=off0,length=len} /= Bytes{array=k',offset=0,length=len}
+        then makeDoubleton len critPos k off0 j (update Nothing) lf
+        else Leaf k' (update $ Just v0)
       go br@(Branch pos bitset children) =
         case compare pos critPos of
           LT -> let !kslice = nybbleAtPos pos k off0 in
@@ -170,13 +177,14 @@ insertNode !len !k !off0 v t0 =
                   let !child' = go child
                    in Branch pos bitset (replaceSmallArray children ix child')
               (_,False) -> errorWithoutStackTrace "Data.Trie.Quad.insert: mistake b"
-          GT -> makeDoubleton len critPos k off0 j v br
+          GT -> makeDoubleton len critPos k off0 j (update Nothing) br
           EQ -> let !kslice = nybbleAtPos pos k off0 in
             case compressIndex kslice bitset of
               (_,True) -> errorWithoutStackTrace "Data.Trie.Quad.insert: mistake d"
               (ix,False) -> Branch pos
                 (bitset .|. unsafeShiftL (1 :: Word) (fromIntegral @Word64 @Int kslice))
-                (insertSmallArray children ix (Leaf (Bytes.toByteArray Bytes{array=k,offset=off0,length=len}) v))
+                (insertSmallArray children ix
+                  (Leaf (Bytes.toByteArray Bytes{array=k,offset=off0,length=len}) (update Nothing)))
    in go t0
 
 nybbleAtPos :: Int -> ByteArray -> Int -> Word64

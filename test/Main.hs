@@ -8,17 +8,14 @@
 {-# language DerivingStrategies #-}
 {-# language GeneralizedNewtypeDeriving #-}
 
-import Control.Monad (when,replicateM)
+{-# OPTIONS_GHC -fno-warn-orphans #-}
+
 import Data.Bits (unsafeShiftR)
-import Data.Bool (bool)
 import Data.Bytes.Types (BytesN(..))
-import Data.Char (ord)
-import Data.Primitive (ByteArray)
 import Data.Word (Word64,Word8,Word16)
 import Data.Foldable (foldl')
 import Test.Tasty (defaultMain,testGroup,TestTree)
-import Test.Tasty.HUnit ((@=?),assertFailure)
-import Test.Tasty.QuickCheck (testProperty,(===))
+import Test.Tasty.HUnit ((@=?))
 import Text.Printf (printf)
 
 import qualified Arithmetic.Nat as Nat
@@ -26,8 +23,6 @@ import qualified Data.List as List
 import qualified Data.Trie.Quad as Trie
 import qualified Data.Trie.Quad.Prefix as Prefix
 import qualified Data.Trie.Quad.Bytes as BytesTrie
-import qualified Data.Bits as Bits
-import qualified Data.Primitive as PM
 import qualified GHC.Exts as Exts
 import qualified Test.Tasty.HUnit as THU
 import qualified Test.Tasty.QuickCheck as QC
@@ -41,7 +36,7 @@ tests = testGroup "trie"
     [ THU.testCase "A" $
         Trie.lookup 0x0AFF
           (Trie.insert
-            0x0BFF 
+            0x0BFF
             "there"
             (Trie.singleton 0x0AFF "hello")
           )
@@ -49,13 +44,13 @@ tests = testGroup "trie"
         Just "hello"
     , THU.testCase "B" $
         (Trie.insert
-          0x0BFF 
+          0x0BFF
           "there"
           (Trie.singleton 0x0AFF "hello")
         )
         @=?
         (Trie.insert
-          0x0AFF 
+          0x0AFF
           "hello"
           (Trie.singleton 0x0BFF "there")
         )
@@ -92,11 +87,11 @@ tests = testGroup "trie"
     , THU.testCase "F" $ case Trie.valid alphaTrie of
         True -> pure ()
         False -> THU.assertFailure (show alphaTrie)
-    , THU.testCase "G" $ 
+    , THU.testCase "G" $
         Trie.Branch 60 0b0000000000000011 (Exts.fromListN 2 [Trie.Leaf 0 "bar",Trie.Leaf 1 "foo"])
         @=?
         Trie.insert 1 "foo" (Trie.singleton 0 "bar")
-    , THU.testCase "H" $ 
+    , THU.testCase "H" $
         Trie.Branch 60 0b0000000000000011 (Exts.fromListN 2 [Trie.Leaf 0 "baz",Trie.Leaf 1 "foo"])
         @=?
         Trie.insert 0 "baz" (Trie.insert 1 "foo" (Trie.singleton 0 "bar"))
@@ -166,6 +161,27 @@ tests = testGroup "trie"
     , THU.testCase "F" $ case BytesTrie.valid alphaBytesTrie of
         True -> pure ()
         False -> THU.assertFailure (show alphaBytesTrie)
+    , THU.testCase "G" $
+        ( BytesTrie.upsert Nat.two (w16b 0x0CFF) (maybe "people" (<> " Kenobi"))
+        $ BytesTrie.insert Nat.two (w16b 0x0BFF) "there"
+        $ BytesTrie.insert Nat.two (w16b 0x0CFF) "General"
+        $ BytesTrie.singleton Nat.two (w16b 0x0AFF) "hello"
+        )
+        @=?
+        ( BytesTrie.insert Nat.two (w16b 0x0CFF) "General Kenobi"
+        $ BytesTrie.insert Nat.two (w16b 0x0AFF) "hello"
+        $ BytesTrie.singleton Nat.two (w16b 0x0BFF) "there"
+        )
+    , THU.testCase "H" $
+        ( BytesTrie.upsert Nat.two (w16b 0x0CFF) (maybe "people" (<> " Kenobi"))
+        $ BytesTrie.insert Nat.two (w16b 0x0BFF) "there"
+        $ BytesTrie.singleton Nat.two (w16b 0x0AFF) "hello"
+        )
+        @=?
+        ( BytesTrie.insert Nat.two (w16b 0x0CFF) "people"
+        $ BytesTrie.insert Nat.two (w16b 0x0AFF) "hello"
+        $ BytesTrie.singleton Nat.two (w16b 0x0BFF) "there"
+        )
     ]
   , testGroup "prefix"
     [ THU.testCase "A" $
@@ -233,20 +249,6 @@ alphaBytesTrie = id
   $ BytesTrie.insert    Nat.two (w16b 0x0AF0) "baz"
   $ BytesTrie.singleton Nat.two (w16b 0x0AE0) "hello"
 
-instance Show a => Show (Trie.Trie a) where
-  showsPrec !d (Trie.Leaf k v) = showParen (d > 10) $
-    showString "Leaf " .
-    (\s -> printf "0x%016x" k ++ s) .
-    showChar ' ' .
-    showsPrec 11 v
-  showsPrec !d (Trie.Branch pos bitset children) = showParen (d > 10) $
-    showString "Branch " .
-    showsPrec 11 pos .
-    showChar ' ' .
-    (\s -> printf "0b%016b" bitset ++ s) .
-    showChar ' ' .
-    showsPrec 11 children
-    
 instance Show a => Show (Prefix.Trie a) where
   showsPrec !d (Prefix.Leaf klen k v) = showParen (d > 10) $
     showString "Leaf " .
