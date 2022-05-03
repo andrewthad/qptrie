@@ -19,6 +19,7 @@ module Data.Trie.Quad.Bytes
   , singleton
   , insert
   , upsert
+  , upsertM
   , lookup
   , valid
   , foldr
@@ -29,14 +30,16 @@ module Data.Trie.Quad.Bytes
 
 import Prelude hiding (lookup,length,foldr)
 
-import Data.Trie.Internal (insertSmallArray,replaceSmallArray)
-import Data.Bits (countLeadingZeros,xor,popCount,(.&.),(.|.),unsafeShiftR,unsafeShiftL)
-import Data.Primitive (ByteArray)
-import Data.Bytes.Types (BytesN(..),Bytes(..),ByteArrayN(..))
-import Data.Primitive (SmallArray)
-import Data.Word (Word8,Word64)
 import Control.Monad.ST.Run (runSmallArrayST)
+import Data.Bits (countLeadingZeros,xor,popCount,(.&.),(.|.),unsafeShiftR,unsafeShiftL)
+import Data.Bytes.Types (BytesN(..),Bytes(..),ByteArrayN(..))
+import Data.Functor.Identity (Identity(..))
+import Data.Primitive (ByteArray)
+import Data.Primitive (SmallArray)
+import Data.Trie.Internal (insertSmallArray,replaceSmallArray)
+import Data.Word (Word8,Word64)
 import GHC.TypeNats (Nat)
+
 import qualified Arithmetic.Types as Arithmetic
 import qualified Arithmetic.Unsafe as Arithmetic
 import qualified Data.Bytes as Bytes
@@ -152,39 +155,68 @@ compressIndex !i !bitset =
 
 insert :: Arithmetic.Nat n -> BytesN n -> a -> Trie n a -> Trie n a
 {-# inline insert #-}
-insert (Arithmetic.Nat n) BytesN{array, offset} v (Trie trie)
-  = Trie (upsertNode n array offset (const v) trie)
+insert (Arithmetic.Nat n) BytesN{array, offset} v (Trie trie)=
+  let updateM = Identity . const v
+      nodeM = upsertNodeM n array offset updateM trie
+   in Trie (runIdentity nodeM)
 
 upsert :: Arithmetic.Nat n -> BytesN n -> (Maybe a -> a) -> Trie n a -> Trie n a
 {-# inline upsert #-}
-upsert (Arithmetic.Nat n) BytesN{array,offset} update (Trie trie)
-  = Trie (upsertNode n array offset update trie)
+upsert (Arithmetic.Nat n) BytesN{array,offset} update (Trie trie) =
+  let updateM = Identity . update
+      nodeM = upsertNodeM n array offset updateM trie
+   in Trie (runIdentity nodeM)
 
-upsertNode :: Int -> ByteArray -> Int -> (Maybe a -> a) -> Node a -> Node a
-{-# inline upsertNode #-} -- inline b/c it takes a callback
-upsertNode !len !k !off0 update t0 =
+upsertM :: (Monad m)
+  => Arithmetic.Nat n
+  -> BytesN n
+  -> (Maybe a -> m a)
+  -> Trie n a
+  -> m (Trie n a)
+{-# inline upsertM #-} -- inline b/c it takes a callback
+upsertM (Arithmetic.Nat n) BytesN{array,offset} updateM (Trie trie) = do
+  !node' <- upsertNodeM n array offset updateM trie
+  pure $! Trie node'
+
+upsertNodeM :: (Monad m)
+  => Int -- ^ length of key remaining
+  -> ByteArray -- ^ key
+  -> Int -- ^ offset into the key
+  -> (Maybe a -> m a) -- ^ create or modify a value
+  -> Node a -- ^ node to start at
+  -> m (Node a)
+{-# inline upsertNodeM #-} -- inline b/c it takes a callback
+upsertNodeM !len !k !off0 updateM t0 =
   let !j = nearestKey k off0 t0
       !critPos = deltaNybbleStartIx len j 0 k off0
       go lf@(Leaf k' v0) = if Bytes{array=k,offset=off0,length=len} /= Bytes{array=k',offset=0,length=len}
-        then makeDoubleton len critPos k off0 j (update Nothing) lf
-        else Leaf k' (update $ Just v0)
+        then do
+          !v <- updateM Nothing
+          pure $! makeDoubleton len critPos k off0 j v lf
+        else do
+          !v <- updateM $! Just v0
+          pure $! Leaf k' v
       go br@(Branch pos bitset children) =
         case compare pos critPos of
           LT -> let !kslice = nybbleAtPos pos k off0 in
             case compressIndex kslice bitset of
               (ix,True) -> case PM.indexSmallArray## children ix of
-                (# child #) ->
-                  let !child' = go child
-                   in Branch pos bitset (replaceSmallArray children ix child')
+                (# child #) -> do
+                  !child' <- go child
+                  pure $! Branch pos bitset (replaceSmallArray children ix child')
               (_,False) -> errorWithoutStackTrace "Data.Trie.Quad.insert: mistake b"
-          GT -> makeDoubleton len critPos k off0 j (update Nothing) br
+          GT -> do
+            !v <- updateM Nothing
+            pure $! makeDoubleton len critPos k off0 j v br
           EQ -> let !kslice = nybbleAtPos pos k off0 in
             case compressIndex kslice bitset of
               (_,True) -> errorWithoutStackTrace "Data.Trie.Quad.insert: mistake d"
-              (ix,False) -> Branch pos
-                (bitset .|. unsafeShiftL (1 :: Word) (fromIntegral @Word64 @Int kslice))
-                (insertSmallArray children ix
-                  (Leaf (Bytes.toByteArray Bytes{array=k,offset=off0,length=len}) (update Nothing)))
+              (ix,False) -> do
+                !v <- updateM Nothing
+                pure $! Branch pos
+                  (bitset .|. unsafeShiftL (1 :: Word) (fromIntegral @Word64 @Int kslice))
+                  (insertSmallArray children ix
+                    (Leaf (Bytes.toByteArray Bytes{array=k,offset=off0,length=len}) v))
    in go t0
 
 nybbleAtPos :: Int -> ByteArray -> Int -> Word64
