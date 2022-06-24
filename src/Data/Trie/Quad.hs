@@ -16,6 +16,7 @@ module Data.Trie.Quad
   , insert
   , lookup
   , lookup#
+  , foldl'
   , valid
   ) where
 
@@ -27,6 +28,7 @@ import Data.Primitive (SmallArray)
 import Data.Word (Word64)
 import Control.Monad.ST.Run (runSmallArrayST)
 import qualified Data.Primitive as PM
+import qualified Data.Foldable as Foldable
 
 -- This explanation of how popcount is used in this module is copied
 -- from https://github.com/fanf2/qp/blob/HEAD/qp.h:
@@ -185,3 +187,10 @@ valid = go (-1) where
     mod pos 4 == 0
     &&
     all (go pos) children
+
+-- | Strict left fold over the key-value pairs in the trie.
+foldl' :: (b -> Word64 -> a -> b) -> b -> Trie a -> b
+{-# inline foldl' #-}
+foldl' g !b0 t0 = go b0 t0 where
+  go !b (Leaf k a) = g b k a
+  go !b (Branch _ _ children) = Foldable.foldl' go b children
