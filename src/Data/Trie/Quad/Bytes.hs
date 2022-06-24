@@ -179,9 +179,9 @@ upsertM (Arithmetic.Nat n) BytesN{array,offset} updateM (Trie trie) = do
   pure $! Trie node'
 
 upsertNodeM :: (Monad m)
-  => Int -- ^ length (TODO of key remaining?)
+  => Int -- ^ length of key remaining
   -> ByteArray -- ^ key
-  -> Int -- ^ TODO really wish someone would document these things
+  -> Int -- ^ offset into the key
   -> (Maybe a -> m a) -- ^ create or modify a value
   -> Node a -- ^ node to start at
   -> m (Node a)
