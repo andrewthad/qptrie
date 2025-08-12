@@ -25,7 +25,7 @@ import Prelude hiding (lookup)
 import Data.Trie.Internal (insertSmallArray,replaceSmallArray)
 import Data.Bits (countLeadingZeros,xor,popCount,(.&.),(.|.),unsafeShiftR,unsafeShiftL)
 import Data.Primitive (SmallArray)
-import Data.Word (Word64)
+import Data.Word (Word64,Word32)
 import Control.Monad.ST.Run (runSmallArrayST)
 import qualified Data.Primitive as PM
 import qualified Data.Foldable as Foldable
@@ -55,8 +55,8 @@ import qualified Data.Foldable as Foldable
 --   arrays.
 data Trie a
   = Branch
-      !Int -- position, >=0 and <=60, must divide 4 evenly 
-      !Word -- bitset
+      !Word32 -- position, >=0 and <=60, must divide 4 evenly (always cast to int)
+      !Word32 -- bitset (this should actually be a Word16)
       !(SmallArray (Trie a))
       -- invariant: max length of children is 16
       -- invariant: position in any child branches is greater than position of parent
@@ -80,9 +80,9 @@ lookup# !k t0 = go t0 where
     else (# (# #) | #)
   go (Branch pos bitset children) =
     let i :: Word64 -- a 4-bit number, a key slice interpreted as an index
-        i = 0x0F .&. unsafeShiftR k (60 - pos)
-        mask :: Word
-        mask = unsafeShiftL (1 :: Word) (fromIntegral @Word64 @Int i)
+        i = 0x0F .&. unsafeShiftR k (60 - fromIntegral @Word32 @Int pos)
+        mask :: Word32
+        mask = unsafeShiftL (1 :: Word32) (fromIntegral @Word64 @Int i)
      in case bitset .&. mask of
           0 -> (# (# #) | #)
           _ ->
@@ -98,9 +98,9 @@ nearestKey !k t0 = go t0 where
   go (Leaf x _) = x
   go (Branch pos bitset children) =
     let i :: Word64 -- a 4-bit number, a key slice interpreted as an index
-        i = 0x0F .&. unsafeShiftR k (60 - pos)
-        mask :: Word
-        mask = unsafeShiftL (1 :: Word) (fromIntegral @Word64 @Int i)
+        i = 0x0F .&. unsafeShiftR k (60 - fromIntegral @Word32 @Int pos)
+        mask :: Word32
+        mask = unsafeShiftL (1 :: Word32) (fromIntegral @Word64 @Int i)
      in case bitset .&. mask of
           0 -> case PM.indexSmallArray## children 0 of
             (# child #) -> leftmostChildKey child
@@ -116,13 +116,13 @@ leftmostChildKey t0 = go t0 where
   go (Branch _ _ children) = go (PM.indexSmallArray children 0)
 
 compressIndex ::
-     Word64 -- ^ 4-bit number (0 to 15 inclusive)
-  -> Word -- bitset (only lower 16 bits should ever be set)
+     Word32 -- ^ 4-bit number (0 to 15 inclusive)
+  -> Word32 -- bitset (only lower 16 bits should ever be set)
   -> (Int,Bool)
 {-# inline compressIndex #-}
 compressIndex !i !bitset = 
-  let mask :: Word
-      mask = unsafeShiftL (1 :: Word) (fromIntegral @Word64 @Int i)
+  let mask :: Word32
+      mask = unsafeShiftL (1 :: Word32) (fromIntegral @Word32 @Int i)
    in (popCount (bitset .&. (mask - 1)), (bitset .&. mask) /= 0)
 
 insert :: Word64 -> a -> Trie a -> Trie a
@@ -135,7 +135,7 @@ insert !k v t0 =
         else Leaf k v
       go br@(Branch pos bitset children) =
         case compare pos critPos of
-          LT -> let !kslice = 0x0F .&. unsafeShiftR k (60 - pos) in
+          LT -> let !kslice = fromIntegral @Word64 @Word32 (0x0F .&. unsafeShiftR k (60 - fromIntegral @Word32 @Int pos)) in
             case compressIndex kslice bitset of
               (ix,True) -> case PM.indexSmallArray## children ix of
                 (# child #) ->
@@ -143,20 +143,20 @@ insert !k v t0 =
                    in Branch pos bitset (replaceSmallArray children ix child')
               (_,False) -> errorWithoutStackTrace "Data.Trie.Quad.insert: mistake b"
           GT -> makeDoubleton critPos k j v br
-          EQ -> let !kslice = 0x0F .&. unsafeShiftR k (60 - pos) in
+          EQ -> let !kslice = fromIntegral @Word64 @Word32 (0x0F .&. unsafeShiftR k (60 - fromIntegral @Word32 @Int pos)) in
             case compressIndex kslice bitset of
               (_,True) -> errorWithoutStackTrace "Data.Trie.Quad.insert: mistake d"
               (ix,False) -> Branch pos
-                (bitset .|. unsafeShiftL (1 :: Word) (fromIntegral @Word64 @Int kslice))
+                (bitset .|. unsafeShiftL (1 :: Word32) (fromIntegral @Word32 @Int kslice))
                 (insertSmallArray children ix (Leaf k v))
    in go t0
 
 -- critPos must not be 64
 -- the given node contains the j key already
-makeDoubleton :: Int -> Word64 -> Word64 -> a -> Trie a -> Trie a
+makeDoubleton :: Word32 -> Word64 -> Word64 -> a -> Trie a -> Trie a
 makeDoubleton !critPos !k !j v !node =
-  let kslice = 0x0F .&. unsafeShiftR k (60 - critPos)
-      jslice = 0x0F .&. unsafeShiftR j (60 - critPos)
+  let kslice = 0x0F .&. unsafeShiftR k (60 - fromIntegral @Word32 @Int critPos)
+      jslice = 0x0F .&. unsafeShiftR j (60 - fromIntegral @Word32 @Int critPos)
       kleaf = Leaf k v
       arr = runSmallArrayST $ do 
         dst <- PM.newSmallArray 2 kleaf
@@ -170,19 +170,22 @@ makeDoubleton !critPos !k !j v !node =
      ) arr
 
 -- Returns number between 0 and 64. Number always divides 4 evenly.
-deltaNybbleStartIx :: Word64 -> Word64 -> Int
-deltaNybbleStartIx a b = countLeadingZeros (xor a b) .&. 0b11111100
+deltaNybbleStartIx :: Word64 -> Word64 -> Word32
+deltaNybbleStartIx a b =
+  fromIntegral @Int @Word32 (countLeadingZeros (xor a b)) .&. 0b11111100
 
 valid :: Trie a -> Bool
 {-# noinline valid #-}
-valid = go (-1) where
+valid = go 0 where
   go !_ Leaf{} = True
   go !i (Branch pos bitset children) =
     PM.sizeofSmallArray children > 1
     &&
     popCount bitset == PM.sizeofSmallArray children
     &&
-    pos > i
+    pos >= i
+    -- note: this should actually be greater than, not gte, but it's hard to
+    -- pick an initial value since Word32 does not have negative numbers.
     &&
     mod pos 4 == 0
     &&

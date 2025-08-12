@@ -31,7 +31,7 @@ import qualified Data.Primitive as PM
 --   @Data.Trie.Quad@ have. Additionally:
 --
 -- * Every key is accompanied by a prefix. The prefix dictates how many of the
---   most significant bits are used. All insignificant bits are set to zero
+--   most significant bits are used. All insignificant bits are set
 --   to zero. This is very much like a CIDR mask for IP addresses. A prefix
 --   of zero implies a singleton map that matches everything. Prefixes must not
 --   be greater than 64.
