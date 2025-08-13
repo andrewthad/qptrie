@@ -19,6 +19,7 @@ library
     Data.Trie.Quad
     Data.Trie.Quad.Bytes
     Data.Trie.Quad.Prefix
+    Data.Trie.Quad.Prefix.Word32.Word64
   build-depends:
     , base >=4.12 && <5
     , byteslice
