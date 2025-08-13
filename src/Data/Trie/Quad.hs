@@ -171,6 +171,7 @@ makeDoubleton !critPos !k !j v !node =
 
 -- Returns number between 0 and 64. Number always divides 4 evenly.
 deltaNybbleStartIx :: Word64 -> Word64 -> Word32
+{-# inline deltaNybbleStartIx #-}
 deltaNybbleStartIx a b =
   fromIntegral @Int @Word32 (countLeadingZeros (xor a b)) .&. 0b11111100
 

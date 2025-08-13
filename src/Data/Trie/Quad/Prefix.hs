@@ -22,7 +22,7 @@ import Control.Monad.ST.Run (runSmallArrayST)
 import Data.Bits (countLeadingZeros,xor,popCount,(.&.),(.|.),unsafeShiftR,unsafeShiftL)
 import Data.Bits (shiftR,shiftL)
 import Data.Primitive (SmallArray)
-import Data.Word (Word64)
+import Data.Word (Word64,Word32)
 import Numeric (showHex)
 
 import qualified Data.Primitive as PM
@@ -41,26 +41,26 @@ import qualified Data.Primitive as PM
 --   exception.
 data Trie a
   = Branch
-      !Int -- position, >=0 and <=60, must divide 4 evenly 
-      !Word -- bitset
+      !Word32 -- position, >=0 and <=60, must divide 4 evenly 
+      !Word32 -- bitset (only the low 16 bits are used, high 16 bits must be zero)
       !(SmallArray (Trie a)) -- invariant: max length is 16
   | Leaf
-      !Int -- effective key length, between 0 and 64
+      !Word32 -- effective key length, between 0 and 64
       !Word64 -- key, normalized
       !a
   deriving stock (Eq)
 
 normalizeKey ::
-     Int -- number of most significant bits that are used, N.
+     Word32 -- number of most significant bits that are used, N.
   -> Word64 -- the key
   -> Word64 -- key with lower bits zeroed out. Number of zeroed lower bits = 64 - N.
-normalizeKey b w = shiftL 0xFFFF_FFFF_FFFF_FFFF (64 - b) .&. w
+normalizeKey b w = shiftL 0xFFFF_FFFF_FFFF_FFFF (64 - fromIntegral @Word32 @Int b) .&. w
 
 inclusiveUpperBound ::
-     Int -- number of most significant bits that are used, N.
+     Word32 -- number of most significant bits that are used, N.
   -> Word64 -- the key
   -> Word64 -- key with lower bits all set to 1
-inclusiveUpperBound b w = shiftR 0xFFFF_FFFF_FFFF_FFFF b .|. w
+inclusiveUpperBound b w = shiftR 0xFFFF_FFFF_FFFF_FFFF (fromIntegral @Word32 @Int b) .|. w
 
 singleton ::
      Int -- ^ Number of bits to consider, @[0-64]@
@@ -70,7 +70,7 @@ singleton ::
 singleton !b !k !v
   | b < 0 = errorWithoutStackTrace "Data.Trie.Quad.Prefix: key size less than zero"
   | b > 64 = errorWithoutStackTrace "Data.Trie.Quad.Prefix: key size greater than 64"
-  | otherwise = Leaf b (normalizeKey b k) v
+  | otherwise = let !b32 = fromIntegral b :: Word32 in Leaf b32 (normalizeKey b32 k) v
 
 lookup ::
      Word64 -- ^ Key
@@ -88,8 +88,8 @@ lookup# !k t0 = go t0 where
     then (# | v #)
     else (# (# #) | #)
   go (Branch pos bitset children) =
-    let i :: Word64 -- a 4-bit number, a key slice interpreted as an index
-        i = 0x0F .&. unsafeShiftR k (60 - pos)
+    let i :: Word32 -- a 4-bit number, a key slice interpreted as an index
+        i = fromIntegral @Word64 @Word32 (0x0F .&. unsafeShiftR k (60 - fromIntegral @Word32 @Int pos))
         (ix,wasFound) = compressIndex i bitset
      in case wasFound of
           -- False -> error
@@ -115,9 +115,9 @@ nearestKey !k t0 = go t0 where
   go (Leaf _ x _) = x
   go (Branch pos bitset children) =
     let i :: Word64 -- a 4-bit number, a key slice interpreted as an index
-        i = 0x0F .&. unsafeShiftR k (60 - pos)
-        mask :: Word
-        mask = unsafeShiftL (1 :: Word) (fromIntegral @Word64 @Int i)
+        i = 0x0F .&. unsafeShiftR k (60 - fromIntegral @Word32 @Int pos)
+        mask :: Word32
+        mask = unsafeShiftL (1 :: Word32) (fromIntegral @Word64 @Int i)
      in case bitset .&. mask of
           0 -> case PM.indexSmallArray## children 0 of
             (# child #) -> leftmostChildKey child
@@ -132,43 +132,47 @@ leftmostChildKey t0 = go t0 where
   go (Leaf _ k _) = k
   go (Branch _ _ children) = go (PM.indexSmallArray children 0)
 
+-- | Behavior is undefined when the number of bits to consider is
+-- outside of the acceptable range.
 insert ::
      Int -- ^ Number of bits to consider, @[0-64]@
   -> Word64 -- ^ Key, for bit count less than 64, low bits are masked out 
   -> a -- ^ Value
   -> Trie a
   -> Trie a
+{-# noinline insert #-}
 insert !b !k0 v t0 =
-  let !k = normalizeKey b k0
+  let !b32 = fromIntegral @Int @Word32 b
+      !k = normalizeKey b32 k0
       !j = nearestKey k t0
       !critPos = deltaNybbleStartIx j k
       go lf@(Leaf b' k' _) = if k == k'
         then errorWithoutStackTrace ("Data.Trie.Quad.Prefix: overlapping keys " ++ showHex k0 ('[' : shows b ("] and " ++ showHex k' ('[' : shows b' "]"))))
-        else makeDoubleton critPos b k j v lf
+        else makeDoubleton critPos b32 k j v lf
       go br@(Branch pos bitset children) =
         case compare pos critPos of
-          LT -> let !kslice = 0x0F .&. unsafeShiftR k (60 - pos) in
+          LT -> let !kslice = fromIntegral @Word64 @Word32 (0x0F .&. unsafeShiftR k (60 - fromIntegral @Word32 @Int pos)) in
             case compressIndex kslice bitset of
               (ix,True) -> case PM.indexSmallArray## children ix of
                 (# child #) ->
                   let !child' = go child
                    in Branch pos bitset (replaceSmallArray children ix child')
               (_,False) -> errorWithoutStackTrace "Data.Trie.Quad.insert: mistake b"
-          GT -> makeDoubleton critPos b k j v br
-          EQ -> let !kslice = 0x0F .&. unsafeShiftR k (60 - pos) in
+          GT -> makeDoubleton critPos b32 k j v br
+          EQ -> let !kslice = fromIntegral @Word64 @Word32 (0x0F .&. unsafeShiftR k (60 - fromIntegral @Word32 @Int pos)) in
             case compressIndex kslice bitset of
               (_,True) -> errorWithoutStackTrace "Data.Trie.Quad.insert: mistake d"
               (ix,False) -> Branch pos
-                (bitset .|. unsafeShiftL (1 :: Word) (fromIntegral @Word64 @Int kslice))
-                (insertSmallArray children ix (Leaf b k v))
+                (bitset .|. unsafeShiftL (1 :: Word32) (fromIntegral @Word32 @Int kslice))
+                (insertSmallArray children ix (Leaf b32 k v))
    in go t0
 
 -- critPos must not be 64
 -- the given node contains the j key already
-makeDoubleton :: Int -> Int -> Word64 -> Word64 -> a -> Trie a -> Trie a
+makeDoubleton :: Word32 -> Word32 -> Word64 -> Word64 -> a -> Trie a -> Trie a
 makeDoubleton !critPos !klen !k !j v !node =
-  let kslice = 0x0F .&. unsafeShiftR k (60 - critPos)
-      jslice = 0x0F .&. unsafeShiftR j (60 - critPos)
+  let kslice = 0x0F .&. unsafeShiftR k (60 - fromIntegral @Word32 @Int critPos)
+      jslice = 0x0F .&. unsafeShiftR j (60 - fromIntegral @Word32 @Int critPos)
       kleaf = Leaf klen k v
       arr = runSmallArrayST $ do 
         dst <- PM.newSmallArray 2 kleaf
@@ -199,17 +203,20 @@ replaceSmallArray !ary !idx b = runSmallArrayST $ do
   PM.unsafeFreezeSmallArray mary
   where !count = PM.sizeofSmallArray ary
 
-deltaNybbleStartIx :: Word64 -> Word64 -> Int
-deltaNybbleStartIx a b = countLeadingZeros (xor a b) .&. 0b11111100
+-- Returns number between 0 and 64. Number always divides 4 evenly.
+deltaNybbleStartIx :: Word64 -> Word64 -> Word32
+{-# inline deltaNybbleStartIx #-}
+deltaNybbleStartIx a b =
+  fromIntegral @Int @Word32 (countLeadingZeros (xor a b)) .&. 0b11111100
 
 compressIndex ::
-     Word64 -- ^ 4-bit number (0 to 15 inclusive)
-  -> Word -- bitset (only lower 16 bits should ever be set)
+     Word32 -- ^ 4-bit number (0 to 15 inclusive)
+  -> Word32 -- bitset (only lower 16 bits should ever be set)
   -> (Int,Bool)
 {-# inline compressIndex #-}
 compressIndex !i !bitset = 
-  let mask :: Word
-      mask = unsafeShiftL (1 :: Word) (fromIntegral @Word64 @Int i)
+  let mask :: Word32
+      mask = unsafeShiftL (1 :: Word32) (fromIntegral @Word32 @Int i)
    in (popCount (bitset .&. (mask - 1)), (bitset .&. mask) /= 0)
 
 data MaybeWord64
@@ -218,7 +225,7 @@ data MaybeWord64
 
 valid :: Trie a -> Bool
 {-# noinline valid #-}
-valid t0 = case go 0 (-1) t0 of
+valid t0 = case go 0 (0 :: Word32) t0 of
   JustWord64 _ -> True
   NothingWord64 -> False
   where
@@ -235,7 +242,7 @@ valid t0 = case go 0 (-1) t0 of
   go !prevMax0 !i (Branch pos bitset children)
     | PM.sizeofSmallArray children <= 1 = NothingWord64
     | popCount bitset /= PM.sizeofSmallArray children = NothingWord64
-    | pos <= i = NothingWord64
+    | pos < i = NothingWord64 -- note: should actually be lte, but word32 has no negatives to use as an initial value
     | mod pos 4 /= 0 = NothingWord64
     | otherwise = foldl
         (\acc node -> case acc of
