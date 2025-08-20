@@ -62,7 +62,7 @@ normalizeKey ::
      Word32 -- number of most significant bits that are used, N.
   -> Word32 -- the key
   -> Word32 -- key with lower bits zeroed out. Number of zeroed lower bits = 64 - N.
-normalizeKey b w = shiftL 0xFFFF_FFFF (64 - fromIntegral @Word32 @Int b) .&. w
+normalizeKey b w = shiftL 0xFFFF_FFFF (32 - fromIntegral @Word32 @Int b) .&. w
 
 inclusiveUpperBound ::
      Word32 -- number of most significant bits that are used, N.
@@ -71,8 +71,8 @@ inclusiveUpperBound ::
 inclusiveUpperBound b w = shiftR 0xFFFF_FFFF (fromIntegral @Word32 @Int b) .|. w
 
 singleton ::
-     Int -- ^ Number of bits to consider, @[0-64]@
-  -> Word32 -- ^ Key, for bit count less than 64, low bits are masked out 
+     Int -- ^ Number of bits to consider, @[0-32]@
+  -> Word32 -- ^ Key, for bit count less than 32, low bits are masked out 
   -> Word64 -- ^ Value
   -> Trie
 singleton !b !k !v
@@ -97,7 +97,7 @@ lookup# !k t0 = go t0 where
     else (# (# #) | #)
   go (Branch pos bitset children) =
     let i :: Word32 -- a 4-bit number, a key slice interpreted as an index
-        i = 0x0F .&. unsafeShiftR k (60 - fromIntegral @Word32 @Int pos)
+        i = 0x0F .&. unsafeShiftR k (28 - fromIntegral @Word32 @Int pos)
         (ix,wasFound) = compressIndex i bitset
      in case wasFound of
           -- False -> error
@@ -123,7 +123,7 @@ nearestKey !k t0 = go t0 where
   go (Leaf _ x _) = x
   go (Branch pos bitset children) =
     let i :: Word32 -- a 4-bit number, a key slice interpreted as an index
-        i = 0x0F .&. unsafeShiftR k (60 - fromIntegral @Word32 @Int pos)
+        i = 0x0F .&. unsafeShiftR k (28 - fromIntegral @Word32 @Int pos)
         mask :: Word32
         mask = unsafeShiftL (1 :: Word32) (fromIntegral @Word32 @Int i)
      in case bitset .&. mask of
@@ -155,21 +155,21 @@ insert !b !k0 !v t0 =
       !j = nearestKey k t0
       !critPos = deltaNybbleStartIx j k
       go lf@(Leaf b' k' _) = if k == k'
-        then errorWithoutStackTrace ("Data.Trie.Quad.Prefix: overlapping keys " ++ showHex k0 ('[' : shows b ("] and " ++ showHex k' ('[' : shows b' "]"))))
+        then errorWithoutStackTrace ("Data.Trie.Quad.Prefix.Word32.Word64: overlapping keys " ++ showHex k0 ('[' : shows b ("] and " ++ showHex k' ('[' : shows b' "]"))))
         else makeDoubleton critPos b32 k j v lf
       go br@(Branch pos bitset children) =
         case compare pos critPos of
-          LT -> let !kslice = 0x0F .&. unsafeShiftR k (60 - fromIntegral @Word32 @Int pos) in
+          LT -> let !kslice = 0x0F .&. unsafeShiftR k (28 - fromIntegral @Word32 @Int pos) in
             case compressIndex kslice bitset of
               (ix,True) -> case PM.indexSmallArray## children ix of
                 (# child #) ->
                   let !child' = go child
                    in Branch pos bitset (replaceSmallArray children ix child')
-              (_,False) -> errorWithoutStackTrace "Data.Trie.Quad.insert: mistake b"
+              (_,False) -> errorWithoutStackTrace "Data.Trie.Quad.Prefix.Word32.Word64.insert: mistake b"
           GT -> makeDoubleton critPos b32 k j v br
-          EQ -> let !kslice = 0x0F .&. unsafeShiftR k (60 - fromIntegral @Word32 @Int pos) in
+          EQ -> let !kslice = 0x0F .&. unsafeShiftR k (28 - fromIntegral @Word32 @Int pos) in
             case compressIndex kslice bitset of
-              (_,True) -> errorWithoutStackTrace "Data.Trie.Quad.insert: mistake d"
+              (_,True) -> errorWithoutStackTrace "Data.Trie.Quad.Prefix.Word32.Word64.insert: mistake d"
               (ix,False) -> Branch pos
                 (bitset .|. unsafeShiftL (1 :: Word32) (fromIntegral @Word32 @Int kslice))
                 (insertSmallArray children ix (Leaf b32 k v))
@@ -179,8 +179,8 @@ insert !b !k0 !v t0 =
 -- the given node contains the j key already
 makeDoubleton :: Word32 -> Word32 -> Word32 -> Word32 -> Word64 -> Trie -> Trie
 makeDoubleton !critPos !klen !k !j v !node =
-  let kslice = 0x0F .&. unsafeShiftR k (60 - fromIntegral @Word32 @Int critPos)
-      jslice = 0x0F .&. unsafeShiftR j (60 - fromIntegral @Word32 @Int critPos)
+  let kslice = 0x0F .&. unsafeShiftR k (28 - fromIntegral @Word32 @Int critPos)
+      jslice = 0x0F .&. unsafeShiftR j (28 - fromIntegral @Word32 @Int critPos)
       kleaf = Leaf klen k v
       arr = runSmallArrayST $ do 
         dst <- PM.newSmallArray 2 kleaf
