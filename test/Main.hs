@@ -1,12 +1,13 @@
 {-# language BangPatterns #-}
 {-# language BinaryLiterals #-}
 {-# language DataKinds #-}
-{-# language ScopedTypeVariables #-}
-{-# language TypeApplications #-}
-{-# language NumDecimals #-}
-{-# language StandaloneDeriving #-}
 {-# language DerivingStrategies #-}
 {-# language GeneralizedNewtypeDeriving #-}
+{-# language NumDecimals #-}
+{-# language NumericUnderscores #-}
+{-# language ScopedTypeVariables #-}
+{-# language StandaloneDeriving #-}
+{-# language TypeApplications #-}
 
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
@@ -26,6 +27,8 @@ import qualified Data.Trie.Quad.Bytes as BytesTrie
 import qualified GHC.Exts as Exts
 import qualified Test.Tasty.HUnit as THU
 import qualified Test.Tasty.QuickCheck as QC
+
+import qualified Data.Trie.Quad.Prefix.Word32.Word64 as P32
 
 main :: IO ()
 main = defaultMain tests
@@ -214,7 +217,97 @@ tests = testGroup "trie"
         True -> pure ()
         False -> THU.assertFailure (show bigPrefixTrie)
     ]
+  , testGroup "minimize"
+    [ THU.testCase "A" $ let r = P32.minimize ipTrie1 in case P32.valid r of
+        True -> pure ()
+        False -> THU.assertFailure (show r)
+    , THU.testCase "B" $ let r = P32.minimize ipTrie2 in case P32.valid r of
+        True -> pure ()
+        False -> case P32.nodeCount r of
+          1 -> pure ()
+          n -> THU.assertFailure ("Expected node count of 1 but got " ++ show n)
+    , THU.testCase "C" $ let r = P32.minimize ipTrie3 in case P32.valid r of
+        True -> case P32.nodeCount r of
+          3 -> pure ()
+          n -> THU.assertFailure ("Expected node count of 3 but got " ++ show n ++ "\nStructure:\n" ++ show r)
+        False -> THU.assertFailure (show r)
+    , THU.testCase "D" $ let r = P32.minimize ipTrie4 in case P32.valid r of
+        True -> case P32.nodeCount r of
+          3 -> pure ()
+          n -> THU.assertFailure ("Expected node count of 3 but got " ++ show n ++ "\nStructure:\n" ++ show r)
+        False -> THU.assertFailure (show r)
+    , THU.testCase "E" $ let r = P32.minimize ipTrie5 in case P32.valid r of
+        True -> case P32.nodeCount r of
+          1 -> pure ()
+          n -> THU.assertFailure ("Expected node count of 1 but got " ++ show n ++ "\nStructure:\n" ++ show r)
+        False -> THU.assertFailure (show r)
+    , THU.testCase "F" $ let r = P32.minimize ipTrie6 in case P32.valid r of
+        True -> case P32.nodeCount r of
+          1 -> pure ()
+          n -> THU.assertFailure ("Expected node count of 1 but got " ++ show n ++ "\nStructure:\n" ++ show r)
+        False -> THU.assertFailure (show r)
+    , THU.testCase "G" $ let r = P32.minimize ipTrie7 in case P32.valid r of
+        True -> case P32.nodeCount r of
+          5 -> pure ()
+          n -> THU.assertFailure ("Expected node count of 1 but got " ++ show n ++ "\nStructure:\n" ++ show r)
+        False -> THU.assertFailure (show r)
+    ]
   ]
+
+ipTrie1 :: P32.Trie
+ipTrie1 = id
+  $ P32.insert    28 0xAAAA_BBB0 100
+  $ P32.singleton 28 0xAAAA_CCC0 101
+
+ipTrie2 :: P32.Trie
+ipTrie2 = id
+  $ P32.insert    28 0xAAAA_DD00 100
+  $ P32.singleton 28 0xAAAA_DD10 100
+
+ipTrie3 :: P32.Trie
+ipTrie3 = id
+  $ P32.insert    28 0xAAAA_DD00 100
+  $ P32.insert    28 0xAAAA_DD10 100
+  $ P32.insert    28 0xAAAA_DD20 100
+  $ P32.insert    28 0xAAAA_DD30 100
+  $ P32.singleton 32 0xAAAA_AA3F 200
+
+ipTrie4 :: P32.Trie
+ipTrie4 = id
+  $ P32.insert    28 0xAAAA_DD80 100
+  $ P32.insert    28 0xAAAA_DD90 100
+  $ P32.insert    28 0xAAAA_DDA0 100
+  $ P32.insert    28 0xAAAA_DDB0 100
+  $ P32.insert    28 0xAAAA_DDC0 100
+  $ P32.insert    28 0xAAAA_DDD0 100
+  $ P32.insert    28 0xAAAA_DDE0 100
+  $ P32.insert    28 0xAAAA_DDF0 100
+  $ P32.singleton 32 0xAAAA_AA3F 200
+
+ipTrie5 :: P32.Trie
+ipTrie5 = id
+  $ P32.insert    28 0xAAAA_DD80 100
+  $ P32.insert    28 0xAAAA_DD90 100
+  $ P32.insert    28 0xAAAA_DDA0 100
+  $ P32.insert    28 0xAAAA_DDB0 100
+  $ P32.insert    28 0xAAAA_DDC0 100
+  $ P32.insert    28 0xAAAA_DDD0 100
+  $ P32.insert    28 0xAAAA_DDE0 100
+  $ P32.insert    28 0xAAAA_DDF0 100
+  $ P32.singleton 25 0xAAAA_DD00 100
+
+ipTrie6 :: P32.Trie
+ipTrie6 = id
+  $ P32.insert    27 0xAAAA_D100 100
+  $ P32.singleton 27 0xAAAA_D120 100
+
+ipTrie7 :: P32.Trie
+ipTrie7 = id
+  $ P32.insert    27 0xAAAA_D100 100
+  $ P32.insert    27 0xAAAA_D120 200
+  $ P32.insert    27 0xAAAA_D140 100
+  $ P32.insert    27 0xAAAA_D160 100
+  $ P32.singleton 27 0xAAAA_D180 100
 
 bigPrefixTrie :: Prefix.Trie String
 bigPrefixTrie = id

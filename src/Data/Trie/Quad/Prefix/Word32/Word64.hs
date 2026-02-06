@@ -1,7 +1,9 @@
 {-# language BangPatterns #-}
 {-# language BinaryLiterals #-}
 {-# language DerivingStrategies #-}
+{-# language LambdaCase #-}
 {-# language MagicHash #-}
+{-# language MultiWayIf #-}
 {-# language NumericUnderscores #-}
 {-# language TypeApplications #-}
 {-# language UnboxedSums #-}
@@ -20,20 +22,28 @@ module Data.Trie.Quad.Prefix.Word32.Word64
   , lookup
   , lookup#
   , valid
+  , minimize
+  , nodeCount
   ) where
 
 import Prelude hiding (lookup)
 
 import Control.Monad.ST.Run (runSmallArrayST)
-import Data.Bits (countLeadingZeros,xor,popCount,(.&.),(.|.),unsafeShiftR,unsafeShiftL)
+import Data.Maybe (isJust)
+import Data.Foldable (foldl', foldr)
+import Data.Bits (countLeadingZeros,xor,popCount,(.&.),(.|.),unsafeShiftR,unsafeShiftL,testBit)
 import Data.Bits (shiftR,shiftL)
-import Data.Primitive (SmallArray)
+import Data.Primitive (SmallArray,SmallMutableArray)
+import Data.Primitive (indexSmallArray, readSmallArray, writeSmallArray, newSmallArray, unsafeFreezeSmallArray)
 import Data.Word (Word32)
 import Numeric (showHex)
 import GHC.Exts (Word64#)
 import GHC.Word (Word64(W64#))
+import Control.Monad.ST (ST, runST)
+import Text.Printf (printf)
 
 import qualified Data.Primitive as PM
+import qualified Data.Primitive.Contiguous as Contiguous
 
 -- | Non-empty qp tries. These have all of the properties that the tries in
 --   @Data.Trie.Quad@ have. Additionally:
@@ -48,15 +58,118 @@ import qualified Data.Primitive as PM
 -- * The same key must not be inserted more than once. This results in an
 --   exception.
 data Trie
+  -- Invariant: position in any child branches is greater than position of parent
   = Branch
-      !Word32 -- position, >=0 and <=60, must divide 4 evenly 
+      !Word32 -- position, >=0 and <=28, must divide 4 evenly 
       !Word32 -- bitset (only the low 16 bits are used, high 16 bits must be zero)
       !(SmallArray Trie) -- invariant: max length is 16
   | Leaf
-      !Word32 -- effective key length, between 0 and 64
+      !Word32 -- effective key length, between 0 and 32
       !Word32 -- key, normalized
       !Word64
   deriving stock (Eq)
+
+instance Show Trie where
+  showsPrec !d (Leaf klen k v) = showParen (d > 10) $
+    showString "Leaf " .
+    shows klen .
+    showChar ' ' .
+    (\s -> printf "0x%08x" k ++ s) .
+    showChar ' ' .
+    showsPrec 11 v
+  showsPrec !d (Branch pos bitset children) = showParen (d > 10) $
+    showString "Branch " .
+    showsPrec 11 pos .
+    showChar ' ' .
+    (\s -> printf "0b%016b" bitset ++ s) .
+    showChar ' ' .
+    showsPrec 11 children
+
+-- | Make the trie as small as possible by collapsing adjacent values.
+minimize :: Trie -> Trie
+{-# noinline minimize #-}
+minimize = collapseLeaves
+
+collapseLeaves :: Trie -> Trie
+collapseLeaves t0 = case t0 of
+  -- Implementation details: We rely on the fact that any subtrie is
+  -- actually a usable trie in its own rite.
+  Leaf{} -> t0
+  Branch pos bitset children0 -> let children = fmap collapseLeaves children0 in runST $ do
+    decompressed <- decompressArray16 bitset children
+    coalesceAdjacentLeaves decompressed 1 (pos + 4)
+    coalesceAdjacentLeaves decompressed 2 (pos + 3)
+    coalesceAdjacentLeaves decompressed 4 (pos + 2)
+    coalesceAdjacentLeaves decompressed 8 (pos + 1)
+    decompressed' <- unsafeFreezeSmallArray decompressed
+    pure $! compressArray16 decompressed' pos
+
+findFirstJustOrCrash :: SmallArray (Maybe a) -> a
+findFirstJustOrCrash !xs = foldr
+  (\m acc -> case m of {Just x -> x; Nothing -> acc})
+  (errorWithoutStackTrace "Data.Trie.Quad.Prefix.Word32.Word64.compressArray16: could not find present trie")
+  xs
+
+-- This performs an in-place freeze on the mutable array, so the array
+-- cannot be used after this operation.
+compressArray16 ::
+     SmallArray (Maybe Trie)
+  -> Word32 -- pos (this is left alone)
+  -> Trie
+compressArray16 !tries !pos =
+  let count = foldl' (\acc m -> if isJust m then acc + 1 else acc) (0 :: Int) tries
+   in case count of
+        0 -> errorWithoutStackTrace "Data.Trie.Quad.Prefix.Word32.Word64.compressArray16: invariant violated"
+        1 -> findFirstJustOrCrash tries
+        _ -> Branch pos (maybesToBitset tries) (Contiguous.catMaybes tries)
+
+maybesToBitset :: SmallArray (Maybe a) -> Word32
+maybesToBitset xs = go (0 :: Int) (0 :: Word32)
+  where
+  go !ix !acc = case ix of
+    16 -> acc
+    _ -> case indexSmallArray xs ix of
+      Nothing -> go (ix + 1) acc
+      Just{} -> go (ix + 1) (unsafeShiftL (1 :: Word32) ix .|. acc)
+
+coalesceAdjacentLeaves ::
+     SmallMutableArray s (Maybe Trie)
+  -> Int -- adjacency distance to check (must be a power of two)
+  -> Word32 -- leaf key length to consider
+  -> ST s ()
+coalesceAdjacentLeaves !tries !stride !targetKeyLen =
+  let go !ix = case ix of
+        16 -> pure ()
+        _ -> do
+          trie1 <- readSmallArray tries ix
+          trie2 <- readSmallArray tries (ix + stride)
+          if | Just (Leaf klen1 k1 v1) <- trie1
+             , Just (Leaf klen2 k2 v2) <- trie2
+             , klen1 == targetKeyLen
+             , klen2 == targetKeyLen
+             , v1 == v2 -> let k2Norm = normalizeKey (targetKeyLen - 1) k2 in if k1 == k2Norm
+                 then do
+                   writeSmallArray tries (ix + stride) Nothing
+                   writeSmallArray tries ix $! Just $! Leaf (targetKeyLen - 1) k1 v1
+                 -- I'm almost certain that this condition will always hold,
+                 -- but I'm checking it here just in case.
+                 else errorWithoutStackTrace ("Data.Trie.Quad.Prefix.Word32.Word64.coalesceAdjacentLeaves: invariant violated, k1: " ++ printf "0x%08x" k1 ++ ", k2: " ++ printf "0x%08x" k2  ++ ", k2[normalized]: " ++ printf "0x%08x" k2Norm)
+             | otherwise -> pure ()
+          go (ix + (stride * 2))
+   in go 0
+
+decompressArray16 :: Word32 -> SmallArray Trie -> ST s (SmallMutableArray s (Maybe Trie))
+decompressArray16 !w !compressedArray = do
+  dst <- newSmallArray 16 Nothing
+  let pasteLoop !compressedSrcIx !ix = case ix of
+        16 -> pure ()
+        _ -> case testBit w ix of
+          True -> do
+            writeSmallArray dst ix $! Just $! indexSmallArray compressedArray compressedSrcIx
+            pasteLoop (compressedSrcIx + 1) (ix + 1)
+          False -> pasteLoop compressedSrcIx (ix + 1)
+  pasteLoop 0 0
+  pure dst
 
 normalizeKey ::
      Word32 -- number of most significant bits that are used, N.
@@ -217,6 +330,13 @@ deltaNybbleStartIx :: Word32 -> Word32 -> Word32
 deltaNybbleStartIx a b =
   fromIntegral @Int @Word32 (countLeadingZeros (xor a b)) .&. 0b11111100
 
+-- Find the array index (compressed) corresponding to the logical index i. If there
+-- is no element at that logical index, this instead returns the index that is one
+-- greater.
+-- The second element in the tuple is whether the match was exact.
+-- For example:
+-- >>> compressIndex(5, 0b0010_0000_0000_0010)
+-- (1, False)
 compressIndex ::
      Word32 -- ^ 4-bit number (0 to 15 inclusive)
   -> Word32 -- bitset (only lower 16 bits should ever be set)
@@ -258,3 +378,8 @@ valid t0 = case go 0 (0 :: Word32) t0 of
           JustWord32 prevMax -> go prevMax pos node
         ) (JustWord32 prevMax0) children
 
+
+nodeCount :: Trie -> Int
+nodeCount = \case
+  Leaf{} -> 1
+  Branch _ _ children -> 1 + sum (fmap nodeCount children)
