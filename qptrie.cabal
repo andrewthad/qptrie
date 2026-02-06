@@ -24,7 +24,7 @@ library
     , base >=4.12 && <5
     , byteslice
     , natural-arithmetic
-    , contiguous >=0.6.5
+    , contiguous >=0.6.4
     , primitive >=0.7 && <0.10
     , run-st >=0.1
   ghc-options: -Wall -O2
